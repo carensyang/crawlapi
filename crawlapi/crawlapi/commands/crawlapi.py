@@ -34,9 +34,8 @@ class CrawlRuntime(ScrapyCommand):
     def short_desc(self):
         return 'crawl api'
 
-    def _open_spider(self, spider):
-        if self.spider:
-            return self.spider
+    def _open_spider(self, spider_class):
+        spider = spider_class()
         spider.set_crawler(self.crawler_instance)
         self.crawler_instance.engine.open_spider(spider, close_if_idle=False)
         self.spider = spider
@@ -47,25 +46,18 @@ class CrawlRuntime(ScrapyCommand):
             spider = self.spider
         url = any_to_uri(request_or_url)
         request = Request(url, dont_filter=True, callback=spider.parse_item)
-        #request.meta['request'] = meta['request']
         request.meta['source'] = meta['request']
         self.crawler.engine.crawl(request, spider)
 
     def run(self, args, opts):
         self.spider = None
         self.start_server()
-        url = 'http://detail.tmall.com/item.htm?id=40018854476&tbpm=3'
         settings = get_project_settings()
         self.item_class = Product
-        self.vars = {}
         self.crawler_instance = self.crawler_process.create_crawler()
         self.crawler_instance.start()
-        s = TmallSpiderBase()
-        spider = self._open_spider(s)
-        #self.fetch(url, {})
-        request = Request(url, dont_filter=True, callback=spider.parse_item)
-        request.meta['source'] = 50
-        self.crawler.engine.crawl(request, spider)
+        spider = self._open_spider(TmallSpiderBase)
+        self.crawler.engine.running = True
         self.get_from_crawl_queue()
         self.crawler_process.start()
 
@@ -101,23 +93,30 @@ class CrawlApi(resource.Resource):
         self.chech_crawl_result()
 
     def chech_crawl_result(self):
-        while(len(output_queue)) > 0:
-            output_item = output_queue.pop()
-            dat = {}
-            dat['name'] = output_item['name']
-            dat['price'] = output_item['price']
-            output_item['source'].write(json.dumps(dat))
-            output_item['source'].finish()
-        reactor.callLater(0.01, self.chech_crawl_result)
+        try:
+            while(len(output_queue)) > 0:
+                output_item = output_queue.pop()
+                dat = {}
+                dat['name'] = output_item['name']
+                dat['price'] = output_item['price']
+                output_item['source'].write(json.dumps(dat))
+                output_item['source'].finish()
+            reactor.callLater(0.01, self.chech_crawl_result)
+        except:
+            reactor.callLater(0.01, self.chech_crawl_result)
+
+    def crawl_timeout(self, request):
+        if request.finished != True:
+            request.write(ErrorMessage(100, 'Timeout', '').render(request))
+            request.finish()
 
     def render_GET(self, request):
         try:
             request.setHeader(b"content-type", b"application/json; charset=utf-8")
             url = request.args.get('url')[0]
             crawl_queue.append({'url' : url, 'request' : request})
-            #request.write('hhh')
-            #request.finish()
+            reactor.callLater(5, self.crawl_timeout, request)
             return server.NOT_DONE_YET
         except:
-            return ErrorMessage(400, 'Invalid args', '').render(request)
+            return ErrorMessage(200, 'Invalid args', '').render(request)
 
